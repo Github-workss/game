@@ -1,0 +1,716 @@
+<?php
+
+class User extends CActiveRecord
+{
+    const STATUS_NOACTIVE=0;
+    const STATUS_ACTIVE=1;
+    const STATUS_BANNED=-1;
+    
+    //TODO: Delete for next version (backward compatibility)
+    const STATUS_BANED=-1;
+    
+    /**
+     * The followings are the available columns in table 'users':
+     * @var integer $id
+     * @var string $username
+     * @var string $password
+     * @var string $email
+     * @var string $activkey
+     * @var integer $createtime
+     * @var integer $lastvisit
+     * @var integer $superuser
+     * @var integer $status
+     * @var timestamp $create_at
+     * @var timestamp $lastvisit_at
+     */
+
+    /**
+     * Returns the static model of the specified AR class.
+     * @return CActiveRecord the static model class
+     */
+    public static function model($className=__CLASS__)
+    {
+        return parent::model($className);
+    }
+
+    /**
+     * @return string the associated database table name
+     */
+    public function tableName()
+    {
+        return Yii::app()->getModule('user')->tableUsers;
+    }
+
+    /**
+     * @return array validation rules for model attributes.
+     */
+    public function rules()
+    {
+        // NOTE: you should only define rules for those attributes that
+        // will receive user inputs.CConsoleApplication
+        return ((get_class(Yii::app())=='CConsoleApplication' || (get_class(Yii::app())!='CConsoleApplication' && Yii::app()->getModule('user')->isAdmin()))?array(
+            array('username', 'length', 'max'=>20, 'min' => 3,'message' => UserModule::t("Incorrect username (length between 3 and 20 characters).")),
+            array('password', 'length', 'max'=>128, 'min' => 4,'message' => UserModule::t("Incorrect password (minimal length 4 symbols).")),
+            array('email', 'email'),
+            array('username', 'unique', 'message' => UserModule::t("This user's name already exists.")),
+            array('email', 'unique', 'message' => UserModule::t("This user's email address already exists.")),
+            array('username', 'match', 'pattern' => '/^[A-Za-z0-9_]+$/u','message' => UserModule::t("Incorrect symbols (A-z0-9).")),
+            array('status', 'in', 'range'=>array(self::STATUS_NOACTIVE,self::STATUS_ACTIVE,self::STATUS_BANNED)),
+            array('superuser', 'in', 'range'=>array(0,1)),
+            array('create_at', 'default', 'value' => date('Y-m-d H:i:s'), 'setOnEmpty' => true, 'on' => 'insert'),
+            array('lastvisit_at', 'default', 'value' => '0000-00-00 00:00:00', 'setOnEmpty' => true, 'on' => 'insert'),
+            array('username, email, superuser, status', 'required'),
+            array('superuser, status', 'numerical', 'integerOnly'=>true),
+            array('id, username, password, email, activkey, create_at, lastvisit_at, superuser, status', 'safe', 'on'=>'search'),
+        ):((Yii::app()->user->id==$this->id)?array(
+            array('username, email', 'required'),
+            array('username', 'length', 'max'=>20, 'min' => 3,'message' => UserModule::t("Incorrect username (length between 3 and 20 characters).")),
+            array('email', 'email'),
+            array('username', 'unique', 'message' => UserModule::t("This user's name already exists.")),
+            array('username', 'match', 'pattern' => '/^[A-Za-z0-9_]+$/u','message' => UserModule::t("Incorrect symbols (A-z0-9).")),
+            array('email', 'unique', 'message' => UserModule::t("This user's email address already exists.")),
+        ):array()));
+    }
+
+    /**
+     * @return array relational rules.
+     */
+    public function relations()
+    {
+        $relations = Yii::app()->getModule('user')->relations;
+        if (!isset($relations['profile']))
+            $relations['profile'] = array(self::HAS_ONE, 'Profile', 'user_id');
+            $relations['company'] = array(self::HAS_ONE, 'Company', 'user_id');
+        return $relations;
+    }
+
+    /**
+     * @return array customized attribute labels (name=>label)
+     */
+    public function attributeLabels()
+    {
+        return array(
+            'id' => UserModule::t("Id"),
+            'username'=>UserModule::t("username"),
+            'password'=>UserModule::t("password"),
+            'verifyPassword'=>UserModule::t("Retype Password"),
+            'email'=>UserModule::t("E-mail"),
+            'verifyCode'=>UserModule::t("Verification Code"),
+            'activkey' => UserModule::t("activation key"),
+            'createtime' => UserModule::t("Registration date"),
+            'create_at' => UserModule::t("Registration date"),
+            
+            'lastvisit_at' => UserModule::t("Last visit"),
+            'superuser' => UserModule::t("Superuser"),
+            'status' => UserModule::t("Status"),
+        );
+    }
+    
+    public function scopes()
+    {
+        return array(
+            'active'=>array(
+                'condition'=>'status='.self::STATUS_ACTIVE,
+            ),
+            'notactive'=>array(
+                'condition'=>'status='.self::STATUS_NOACTIVE,
+            ),
+            'banned'=>array(
+                'condition'=>'status='.self::STATUS_BANNED,
+            ),
+            'superuser'=>array(
+                'condition'=>'superuser=1',
+            ),
+            'notsafe'=>array(
+                'select' => 'id, username, password, email, activkey, create_at, lastvisit_at, superuser, status',
+            ),
+        );
+    }
+    
+    public function defaultScope()
+    {
+        return CMap::mergeArray(Yii::app()->getModule('user')->defaultScope,array(
+            'alias'=>'user',
+            'select' => 'user.id, user.username, user.email, user.create_at, user.lastvisit_at, user.superuser, user.status',
+        ));
+    }
+    
+    public static function itemAlias($type,$code=NULL) {
+        $_items = array(
+            'UserStatus' => array(
+                self::STATUS_NOACTIVE => UserModule::t('Not active'),
+                self::STATUS_ACTIVE => UserModule::t('Active'),
+                self::STATUS_BANNED => UserModule::t('Banned'),
+            ),
+            'AdminStatus' => array(
+                '0' => UserModule::t('No'),
+                '1' => UserModule::t('Yes'),
+            ),
+        );
+        if (isset($code))
+            return isset($_items[$type][$code]) ? $_items[$type][$code] : false;
+        else
+            return isset($_items[$type]) ? $_items[$type] : false;
+    }
+    
+/**
+     * Retrieves a list of models based on the current search/filter conditions.
+     * @return CActiveDataProvider the data provider that can return the models based on the search/filter conditions.
+     */
+    public function search()
+    {
+        // Warning: Please modify the following code to remove attributes that
+        // should not be searched.
+
+        $criteria=new CDbCriteria;
+        
+        $criteria->compare('id',$this->id);
+        $criteria->compare('username',$this->username,true);
+        $criteria->compare('password',$this->password);
+        $criteria->compare('email',$this->email,true);
+        $criteria->compare('activkey',$this->activkey);
+        $criteria->compare('create_at',$this->create_at);
+        $criteria->compare('lastvisit_at',$this->lastvisit_at);
+        $criteria->compare('superuser',$this->superuser);
+        $criteria->compare('status',$this->status);
+
+        return new CActiveDataProvider(get_class($this), array(
+            'criteria'=>$criteria,
+            'pagination'=>array(
+                'pageSize'=>Yii::app()->getModule('user')->user_page_size,
+            ),
+        ));
+    }
+
+    public function getCreatetime() {
+        return strtotime($this->create_at);
+    }
+
+    public function setCreatetime($value) {
+        $this->create_at=date('Y-m-d H:i:s',$value);
+    }
+
+    public function getLastvisit() {
+        return strtotime($this->lastvisit_at);
+    }
+
+    public function setLastvisit($value) {
+        $this->lastvisit_at=date('Y-m-d H:i:s',$value);
+    }
+    
+    
+    public function getCompanyName() {
+        $company = Company::model()->findByAttributes(array('user_id'=>$this->id));
+        
+        return $company->name;
+    }
+
+    public function getSuggest($q) {
+        $c = new CDbCriteria();
+        $c->addSearchCondition('username', $q, true, 'OR');
+        $c->addSearchCondition('email', $q, true, 'OR');
+        return $this->findAll($c);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<?php
+
+class ProfileController extends Controller
+{
+    public $defaultAction = 'profile';
+    public $layout='//layouts/column2';
+
+    /**
+     * @var CActiveRecord the currently loaded data model instance.
+     */
+    private $_model;
+    /**
+     * Shows a particular model.
+     */
+    public function actionProfile()
+    {
+        $model = $this->loadUser();
+        $this->render('profile',array(
+            'model'=>$model,
+            'profile'=>$model->profile,
+            'company'=>$model->company,
+        ));
+    }
+
+
+    /**
+     * Updates a particular model.
+     * If update is successful, the browser will be redirected to the 'view' page.
+     */
+    public function actionEdit()
+    {
+        $this->layout='//layouts/main';
+        $model = $this->loadUser();
+        $profile=$model->profile;
+        $company=$model->company;
+        
+        $oldCompanyImg=$company->img;
+        // ajax validator
+        if(isset($_POST['ajax']) && $_POST['ajax']==='profile-form')
+        {
+            echo UActiveForm::validate(array($model,$profile));
+            Yii::app()->end();
+        }
+        
+        if(isset($_POST['User']))
+        {
+            $model->attributes=$_POST['User'];
+            $profile->attributes=$_POST['Profile'];
+            if ($company->is_activated == 1) {
+                $company->attributes=$_POST['Company'];
+                $uploadedFile=CUploadedFile::getInstance($company,'img');
+                $img = "";
+                if (!empty($uploadedFile)) {
+                    $fileName = $company->user_id . "." . $uploadedFile->getExtensionName();
+                    $img = $fileName;
+                }
+                else {
+                    $img = $oldCompanyImg;
+                }
+            }
+            
+            if($model->validate()&&$profile->validate()&&($company->is_activated == 0 or $company->validate())) {
+                $model->save();
+                $profile->save();
+                $company->img = $img;
+                if ($company->is_activated == 1) {
+                    
+                    $uploadedGalleryFile=CUploadedFile::getInstance($company,'gallery');
+                    if (!empty($uploadedGalleryFile) and $company->validate(array('gallery'))) {
+                        $savePath = Yii::app()->basePath."/.." .Yii::app()->params['galleryDir'].$company->id."/".$uploadedGalleryFile->getName();
+                        $savePathSmall = Yii::app()->basePath."/.." .Yii::app()->params['gallerySmallDir'].$company->id."/".$uploadedGalleryFile->getName();
+                        $uploadedGalleryFile->saveAs($savePath);
+                        copy($savePath, $savePathSmall);
+                        $image = Yii::app()->image->load($savePathSmall);
+                        $ratio = Yii::app()->params['galleryImageMaxWidth']/Yii::app()->params['galleryImageMaxHeight'];
+                        if ($image->width/$image->height>=$ratio and $image->width>Yii::app()->params['galleryImageMaxWidth']) {
+                            $image->resize(Yii::app()->params['galleryImageMaxWidth'], null);
+                        }
+                        elseif ($image->width/$image->height<$ratio and $image->height>Yii::app()->params['galleryImageMaxHeight']) {
+                            $image->resize(null, Yii::app()->params['galleryImageMaxHeight']);
+                        }
+                        $image->save();
+                    }
+                    
+                    
+                    if (!isset($_POST['Company']['company_type_id'])) {
+                        $company->companyTypes = array();
+                    }
+                    else {
+                        $company->companyTypes = $_POST['Company']['company_type_id'];
+                    }
+                    if ($company->save() and !empty($uploadedFile)) {
+                        $savePath = Yii::app()->basePath."/..".Yii::app()->params['companyImgPath'].$fileName;
+                        $uploadedFile->saveAs($savePath);
+                        $image = Yii::app()->image->load($savePath);
+                        $ratio = Yii::app()->params['companyImgMaxWidth']/Yii::app()->params['companyImgMaxHeight'];
+                        if ($image->width/$image->height>=$ratio and $image->width>Yii::app()->params['companyImgMaxWidth']) {
+                            $image->resize(Yii::app()->params['companyImgMaxWidth'], null);
+                        }
+                        elseif ($image->width/$image->height<$ratio and $image->height>Yii::app()->params['companyImgMaxHeight']) {
+                            $image->resize(null, Yii::app()->params['companyImgMaxHeight']);
+                        }
+                        $image->save();
+                    }
+                }
+                Yii::app()->user->updateSession();
+                Yii::app()->user->setFlash('profileMessage',UserModule::t("Changes is saved."));
+                $this->redirect(array('/user/profile'));
+            } elseif (!$profile->validate()) ($company->is_activated == 0 or $company->validate());
+            
+        }
+
+        $this->render('edit',array(
+            'model'=>$model,
+            'profile'=>$profile,
+            'company'=>$company,
+        ));
+    }
+    
+    /**
+     * Change password
+     */
+    public function actionChangepassword() {
+        $model = new UserChangePassword;
+        if (Yii::app()->user->id) {
+            
+            // ajax validator
+            if(isset($_POST['ajax']) && $_POST['ajax']==='changepassword-form')
+            {
+                echo UActiveForm::validate($model);
+                Yii::app()->end();
+            }
+            
+            if(isset($_POST['UserChangePassword'])) {
+                    $model->attributes=$_POST['UserChangePassword'];
+                    if($model->validate()) {
+                        $new_password = User::model()->notsafe()->findbyPk(Yii::app()->user->id);
+                        $new_password->password = UserModule::encrypting($model->password);
+                        $new_password->activkey=UserModule::encrypting(microtime().$model->password);
+                        $new_password->save();
+                        Yii::app()->user->setFlash('profileMessage',UserModule::t("New password is saved."));
+                        $this->redirect(array("profile"));
+                    }
+            }
+            $this->render('changepassword',array('model'=>$model));
+        }
+    }
+    
+    public function actionDeleteImage($id, $file)
+    {
+        $model = Company::model()->findbyPk($id);
+        if (empty($model)) {
+            throw new CHttpException(404,'The requested page does not exist.');
+        }
+        unlink(Yii::app()->basePath."/.." .Yii::app()->params['gallerySmallDir'].$model->id."/".basename($file));
+        unlink(Yii::app()->basePath."/.." .Yii::app()->params['galleryDir'].$model->id."/".basename($file));
+        $this->redirect(array('edit','id'=>$model->id));
+    }
+    
+
+    /**
+     * Returns the data model based on the primary key given in the GET variable.
+     * If the data model is not found, an HTTP exception will be raised.
+     * @param integer the primary key value. Defaults to null, meaning using the 'id' GET variable
+     */
+    public function loadUser()
+    {
+        if($this->_model===null)
+        {
+            if(Yii::app()->user->id)
+                $this->_model=Yii::app()->controller->module->user();
+            if($this->_model===null)
+                $this->redirect(Yii::app()->controller->module->loginUrl);
+        }
+        return $this->_model;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<?php $this->pageTitle=Yii::app()->name . ' - '.UserModule::t("Profile");
+$this->breadcrumbs=array(
+    UserModule::t("Profile")=>array('profile'),
+    UserModule::t("Edit"),
+);
+$this->menu=array(
+    ((UserModule::isAdmin())
+        ?array('label'=>UserModule::t('Manage Users'), 'url'=>array('/user/admin'))
+        :array()),
+    array('label'=>UserModule::t('List User'), 'url'=>array('/user')),
+    array('label'=>UserModule::t('Profile'), 'url'=>array('/user/profile')),
+    array('label'=>UserModule::t('Change password'), 'url'=>array('changepassword')),
+    array('label'=>UserModule::t('Logout'), 'url'=>array('/user/logout')),
+);
+?>
+<div id="content-center">
+<div id="profile-edit-width">
+
+<div id="profile-edit-title"><?php echo UserModule::t('Edit profile'); ?></div>
+
+<?php if(Yii::app()->user->hasFlash('profileMessage')): ?>
+<div class="success">
+<?php echo Yii::app()->user->getFlash('profileMessage'); ?>
+</div>
+<?php endif; ?>
+<div id="profile-form-div" class="form">
+<?php $form=$this->beginWidget('CActiveForm', array(
+    'id'=>'profile-form',
+    'enableAjaxValidation'=>true,
+    'htmlOptions' => array('enctype'=>'multipart/form-data'),
+)); ?>
+
+    <p class="note"><?php echo UserModule::t('Fields with <span class="required">*</span> are required.'); ?></p>
+
+    <?php echo $form->errorSummary(array($model,$profile)); ?>
+    <div class="row">
+        <?php echo $form->labelEx($model,'username'); ?>
+        <?php echo $form->textField($model,'username',array('size'=>20,'maxlength'=>20)); ?>
+        <?php echo $form->error($model,'username'); ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($model,'email'); ?>
+        <?php echo $form->textField($model,'email',array('size'=>60,'maxlength'=>128)); ?>
+        <?php echo $form->error($model,'email'); ?>
+    </div>
+
+<?php 
+        $profileFields=$profile->getFields();
+        if ($profileFields) {
+            foreach($profileFields as $field) {
+            ?>
+    <div class="row">
+        <?php echo $form->labelEx($profile,$field->varname);
+        
+        if ($widgetEdit = $field->widgetEdit($profile)) {
+            echo $widgetEdit;
+        } elseif ($field->range) {
+            echo $form->dropDownList($profile,$field->varname,Profile::range($field->range));
+        } elseif ($field->field_type=="TEXT") {
+            echo $form->textArea($profile,$field->varname,array('rows'=>6, 'cols'=>50));
+        } else {
+            echo $form->textField($profile,$field->varname,array('size'=>60,'maxlength'=>(($field->field_size)?$field->field_size:255)));
+        }
+        echo $form->error($profile,$field->varname); ?>
+    </div>    
+            <?php
+            }
+        }
+?>
+    <div class="row">
+        <?php echo $form->labelEx($company,'name'); ?>
+<?php if ($company->is_activated == 1) { ?>
+        <?php echo $form->textField($company,'name'); ?>
+        <?php echo $form->error($company,'name'); ?>
+<?php } else { ?>
+        <?php echo $company->name; ?>
+<?php } ?>
+    </div>
+    <div class="row">
+        <?php echo $form->labelEx($company,'region_id'); ?>
+<?php if ($company->is_activated == 1) { ?>
+
+<?php
+$rootobj = Region::model()->findByPk(1);
+$regions = $rootobj->getTree();
+$regionsList = array();
+foreach ($regions as $region) {
+    $spacer = "";
+    for ($i=0;$i<$region->level;$i++) {
+        $spacer .= "  ";
+    }
+    $regionsList[$region->id] = $spacer.$region->name;
+}
+echo $form->dropDownList($company, 'region_id', $regionsList);
+?>
+
+        <?php echo $form->error($company,'region_id'); ?>
+<?php } else { ?>
+        <?php $company->region ? $company->region->name: "-"; ?>
+<?php } ?>
+    </div>
+    <div class="row">
+        <?php echo $form->labelEx($company,'companyTypes'); ?>
+<?php if ($company->is_activated == 1) { ?>
+
+<?php
+
+$rootobj = CompanyType::model()->findByPk(1);
+$companyTypes = $rootobj->getTree();
+$companyTypesList = array();
+foreach ($companyTypes as $companyType) {
+    $spacer = "";
+    for ($i=0;$i<$companyType->level;$i++) {
+        $spacer .= "&nbsp;&nbsp;";
+    }
+    $companyTypesList[$companyType->id] = $spacer.$companyType->name;
+}
+unset($companyTypesList[1]);
+if (empty($company->company_type_id) and is_array($company->companyTypes) && count($company->companyTypes))
+    $company->company_type_id = CHtml::listData($company->companyTypes, 'id','id');
+echo $form->checkBoxList($company, 'company_type_id', $companyTypesList,
+                array('separator'=>"", 'template'=>"<div class='company-type-wide'><div class='company-type-name-wide'>{label}</div><div class='company-type-checkbox'>{input}</div></div>"));
+?>
+
+        <?php echo $form->error($company,'companyTypes'); ?>
+<?php } else { ?>
+        <?php 
+$companyTypesList = array();
+foreach ($company->companyTypes as $companyType) {
+    $spacer = "";
+    $companyTypesList[$companyType->id] = $companyType->name;
+}
+echo implode(", ",$companyTypesList); ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'phone'); ?>
+<?php if ($company->is_activated == 1) { ?>
+        <?php
+        $this->widget('CMaskedTextField', array(
+                    'model' => $company,
+                    'attribute' => 'phone',
+                    'mask' => '79999999999',
+                    //'charMap' => array('.'=>'[\.]' , ','=>'[,]'),
+                    'htmlOptions' => array('size' => 15, 'maxlength'=>11)
+            ));
+        ?> <i>пример: "<b>77272345678</b>"</i>
+        <?php echo $form->error($company,'phone'); ?>
+<?php } else { ?>
+        <?php echo $company->phone; ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'address'); ?>
+<?php if ($company->is_activated == 1) { ?>
+        <?php echo $form->textField($company,'address'); ?>
+        <?php echo $form->error($company,'address'); ?>
+<?php } else { ?>
+        <?php echo $company->address; ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'email'); ?>
+<?php if ($company->is_activated == 1) { ?>
+        <?php echo $form->textField($company,'email'); ?>
+        <?php echo $form->error($company,'email'); ?>
+<?php } else { ?>
+        <?php echo $company->email; ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'img'); ?>
+        <?php echo CHtml::image(Yii::app()->params['companyImgPath'].$company->img, $company->name); ?><br>
+<?php if ($company->is_activated == 1) { ?>
+        <div class="upload-image"><?php echo $form->fileField($company, 'img'); ?></div>
+        <?php echo $form->error($company,'img'); ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'description'); ?>
+<?php if ($company->is_activated == 1) { ?>
+        <?php echo $form->textArea($company,'description',array('rows'=>6, 'cols'=>50)); ?>
+        <?php echo $form->error($company,'description'); ?>
+<?php } else { ?>
+        <?php echo $company->description; ?>
+<?php } ?>
+    </div>
+
+    <div class="row">
+        <?php echo $form->labelEx($company,'place'); ?>
+        <div id="map-company" style="height:500px; width:500px; "></div>
+        <script src="https://maps.googleapis.com/maps/api/js?v=3.exp&signed_in=true"></script>
+    <script>
+<?php
+if ($company->region_id == null) {
+    $region = Region::model()->findByPk(1);
+    $zoom = 5;
+}
+else {
+    $region = $company->region;
+    $zoom = 6;
+}
+
+
+
+?>
+var map;
+var companyMarker;
+
+    
+function initialize() {
+    var mapOptions = {
+    zoom: <?php echo $zoom; ?>,
+        center: new google.maps.LatLng(<?php echo $region->lat; ?>, <?php echo $region->lng; ?>),
+        mapTypeId: google.maps.MapTypeId.ROADMAP
+    };
+    
+    
+
+    map = new google.maps.Map(document.getElementById('map-company'),
+        mapOptions);
+    
+    
+    google.maps.event.addListener(map, "click", function(event) {
+        var lat = event.latLng.lat();
+        var lng = event.latLng.lng();
+        $("#Company_lat_upd").val(lat);
+        $("#Company_lng_upd").val(lng);
+        // populate yor box/field with lat, lng
+        
+        if (companyMarker != null ) {
+            companyMarker.setMap(null);
+        }
+        companyMarker = new google.maps.Marker({
+            position: new google.maps.LatLng(lat, lng)
+        });
+        companyMarker.setMap(map);
+        
+    });
+
+<?php
+if (!empty($company->lat)) {
+?>
+    companyMarker = new google.maps.Marker({
+        position: new google.maps.LatLng(<?php echo $company->lat; ?>, <?php echo $company->lng; ?>)
+    });
+    companyMarker.setMap(map);
+<?php
+}
+?>
+}
+
+
